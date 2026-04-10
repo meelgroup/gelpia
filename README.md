@@ -58,7 +58,7 @@ macOS helper script, then compile Gelpia with the macOS make flag:
 
     python -m pip install --upgrade pip
     pip install sly
-    brew install bison flex wget
+    brew install bison flex meson ninja wget
     bash .github/scripts/build-macos-requirements.sh
     make MACOS=1
 
