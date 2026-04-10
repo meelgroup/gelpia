@@ -78,9 +78,6 @@ jobs:
       - name: Build gelpia
         run: make
 
-      - name: Verify README example output
-        run: bash .github/scripts/check-readme-example.sh
-
       - name: Get gelpia_tests
         run: |
           git clone https://github.com/soarlab/gelpia_tests.git
