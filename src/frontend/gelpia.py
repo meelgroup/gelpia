@@ -9,6 +9,7 @@ from process_function import process_function
 import os
 import os.path as path
 import re
+import subprocess
 import sys
 import time
 from multiprocessing import Process, Value
@@ -64,6 +65,7 @@ def setup_requirements(git_dir):
 
     ld_lib_addition = path.join(git_dir, "requirements/lib")
     append_to_environ("LD_LIBRARY_PATH", ld_lib_addition)
+    append_to_environ("DYLD_LIBRARY_PATH", ld_lib_addition)
 
     lib_addition = path.join(git_dir, "requirements/lib")
     append_to_environ("LIBRARY_PATH", lib_addition)
@@ -78,6 +80,7 @@ def setup_requirements(git_dir):
 @run_once
 def setup_rust_env(git_dir, debug):
     append_to_environ("LD_LIBRARY_PATH", path.join(git_dir, ".compiled"))
+    append_to_environ("DYLD_LIBRARY_PATH", path.join(git_dir, ".compiled"))
 
     if debug:
         name = "debug"
@@ -87,8 +90,20 @@ def setup_rust_env(git_dir, debug):
 
     append_to_environ("LD_LIBRARY_PATH",
                       path.join(git_dir, "src/func/target/{}".format(name)))
+    append_to_environ("DYLD_LIBRARY_PATH",
+                      path.join(git_dir, "src/func/target/{}".format(name)))
     append_to_environ("LD_LIBRARY_PATH",
                       path.join(git_dir, "target/{}/deps".format(name)))
+    append_to_environ("DYLD_LIBRARY_PATH",
+                      path.join(git_dir, "target/{}/deps".format(name)))
+
+    try:
+        rust_lib = subprocess.check_output(["rustc", "--print", "target-libdir"],
+                                           universal_newlines=True).strip()
+        append_to_environ("LD_LIBRARY_PATH", rust_lib)
+        append_to_environ("DYLD_LIBRARY_PATH", rust_lib)
+    except (OSError, subprocess.CalledProcessError):
+        pass
 
     cooperative = path.join(git_dir, "target/{}/cooperative".format(name))
 
