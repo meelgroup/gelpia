@@ -21,8 +21,8 @@ runtime, allowing us to handle functions with many variables.
 
 
 ## Building
-Known to build on Ubuntu 14.04 through 18.04
-Currently only Linux is explicitly supported.
+Gelpia now has separate native build setups for Linux and macOS.
+Linux remains the primary build path, and macOS builds use `make MACOS=1`.
 
 * Requirements:
 	* Not included:
@@ -38,12 +38,32 @@ Currently only Linux is explicitly supported.
 		* gaol
 		* crlibm
 
-For automatic building of the requirements run `make requirements`
-For building by hand see _documents/BuildingRequirements.md_
+### Linux
 
-Once requirements are met, gelpia may be compiled by running `make`
-This runs Rust's cargo build system as well as adding the correct files to bin
-for execution.
+Install the system dependencies first, then build the bundled native
+requirements:
+
+    python -m pip install --upgrade pip
+    pip install sly
+    sudo apt install flex bison wget
+    make requirements
+    make
+
+For building the requirements by hand see _documents/BuildingRequirements.md_.
+
+### macOS
+
+Install the build tools with Homebrew, build the native requirements with the
+macOS helper script, then compile Gelpia with the macOS make flag:
+
+    python -m pip install --upgrade pip
+    pip install sly
+    brew install bison flex wget
+    bash .github/scripts/build-macos-requirements.sh
+    make MACOS=1
+
+Both build paths run Rust's cargo build system and install the frontend files
+into `bin/` for execution.
 
 
 ## Using
