@@ -1,0 +1,70 @@
+name: Python CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-smoke-checks:
+    name: Frontend Smoke Checks (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show Python version
+        run: python --version
+
+      - name: Install Python frontend dependency
+        run: python -m pip install --upgrade pip sly
+
+      - name: Compile Python frontend sources
+        run: PYTHONPYCACHEPREFIX=.pycache python -m compileall src/frontend
+
+      - name: Verify Python frontend imports
+        run: |
+          PYTHONPATH=src/frontend:src/frontend/function_transforms \
+          python -c "import argument_parser, gelpia_logging, process_function"
+
+      - name: Validate repository entrypoints exist
+        run: |
+          test -f Makefile
+          test -f Cargo.toml
+          test -f src/frontend/gelpia.py
+
+      - name: Note native build gap
+        run: |
+          echo "Skipping the full native gelpia build in this workflow."
+          echo "The project depends on external GAOL/crlibm/native setup, so"
+          echo "end-to-end compilation should be added once that toolchain is"
+          echo "standardized for GitHub-hosted runners."
+
+  rust-manifest-check:
+    name: Rust Manifest Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate Cargo metadata
+        run: cargo metadata --format-version 1 --no-deps > /dev/null
