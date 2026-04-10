@@ -11,9 +11,8 @@ path = "src/gaol.rs"
 crate-type = ["dylib"]
 
 [dependencies]
-libc = "0.2.62"
-num-traits = "0.2"
+libc = "=0.2.62"
+num-traits = "=0.2.8"
 
 [build-dependencies]
-cc = "1.0.45"
-
+cc = "=1.0.45"
