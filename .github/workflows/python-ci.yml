@@ -48,12 +48,49 @@ jobs:
           test -f Cargo.toml
           test -f src/frontend/gelpia.py
 
-      - name: Note native build gap
+  native-end-to-end-checks:
+    name: Native End-to-End Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show Python version
+        run: python --version
+
+      - name: Install dependencies
         run: |
-          echo "Skipping the full native gelpia build in this workflow."
-          echo "The project depends on external GAOL/crlibm/native setup, so"
-          echo "end-to-end compilation should be added once that toolchain is"
-          echo "standardized for GitHub-hosted runners."
+          python -m pip install --upgrade pip
+          pip install sly
+          sudo apt-get update
+          sudo apt-get install -y flex bison wget
+
+      - name: Build requirements
+        run: make requirements
+
+      - name: Build gelpia
+        run: make
+
+      - name: Verify README example output
+        run: bash .github/scripts/check-readme-example.sh
+
+      - name: Get gelpia_tests
+        run: |
+          git clone https://github.com/soarlab/gelpia_tests.git
+          cd gelpia_tests
+          make
+
+      - name: Run tests
+        run: |
+          cd gelpia_tests
+          make test
 
   rust-manifest-check:
     name: Rust Manifest Check
