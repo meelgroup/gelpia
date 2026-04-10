@@ -81,7 +81,7 @@ jobs:
 
       - name: Install macOS system dependencies
         if: runner.os == 'macOS'
-        run: brew install bison flex wget
+        run: brew install bison flex meson ninja wget
 
       - name: Build requirements
         run: |
