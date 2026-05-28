@@ -54,6 +54,13 @@ else
   git checkout cd0ee1a75febab97a7f6c18a03e31780a2717f2c
   patch -p1 < "$ROOT_DIR/documents/gaol-4.2.0.patch"
 
+  # The repo ships pre-compiled flex/bison output (.cpp files). Regenerate them
+  # so the abs support added by the patch is actually compiled into the library.
+  flex -o gaol/gaol_interval_lexer.cpp gaol/gaol_interval_lexer.lpp
+  bison --defines=gaol/gaol_interval_parser.h \
+        -o gaol/gaol_interval_parser.cpp \
+        gaol/gaol_interval_parser.ypp
+
   meson setup build --prefix="$REQ_DIR" -Dwith-mathlib=crlibm
   meson compile -C build
   meson install -C build
