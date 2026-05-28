@@ -26,7 +26,7 @@ Linux remains the primary build path, and macOS builds use `make MACOS=1`.
 
 * Requirements:
 	* Not included:
-		* python3
+		* python3 (Python 3.6 or greater)
 			* sly
 		* bison
 		* flex
