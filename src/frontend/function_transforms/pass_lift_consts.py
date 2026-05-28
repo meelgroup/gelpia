@@ -19,8 +19,8 @@ def pass_lift_consts(exp, inputs):
     """ Extracts constant values from an expression """
 
     CONST = {"Const", "ConstantInterval", "Integer", "Float", "SymbolicConst"}
-    NON_CONST_UNOPS = {"sinh", "cosh", "tanh", "dabs", "datanh", "floor_power2",
-                       "sym_interval"}
+    NON_CONST_UNOPS = {"abs", "sinh", "cosh", "tanh", "dabs", "datanh",
+                       "floor_power2", "sym_interval"}
 
     consts = dict()
     hashed = dict()
