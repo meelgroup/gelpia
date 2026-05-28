@@ -19,10 +19,33 @@ def pass_lift_inputs_and_inline_assigns(exp):
     """ Extracts input variables from an expression and inlines assignments"""
 
     # Function local variables
-    assigns = dict()         # name -> expression
-    used_assigns = set()          # assignments seen in the main exp
-    inputs = OrderedDict()  # name -> input range
-    used_inputs = set()          # inputs seen in the main exp
+    assigns = dict()       # name -> expression
+    used_assigns = set()   # assignments seen in the main exp
+    inputs = OrderedDict() # name -> input range
+    used_inputs = set()    # inputs seen in the main exp
+    constraints = set()    # constraints
+    cost = list()          # all cost expression pieces
+
+    def _e_bool_op(work_stack, count, exp):
+        assert(exp[0] in {"or", "and"})
+        assert(len(exp) == 3)
+        work_stack.append((True, count, exp[0]))
+        work_stack.append((False, 2, exp[2]))
+        work_stack.append((False, 2, exp[1]))
+
+    def _e_bool_neg(work_stack, count, exp):
+        assert(exp[0] == "not")
+        assert(len(exp) == 2)
+        work_stack.append((True, count, exp[0]))
+        work_stack.append((False, 1, exp[1]))
+
+    def _e_constrain(work_stack, count, exp):
+        assert(exp[0] == "Constrain")
+        assert(len(exp) == 4)
+        work_stack.append((True, count, exp[0]))
+        work_stack.append((False, 3, exp[3]))
+        work_stack.append((False, 3, exp[2]))
+        work_stack.append((True,  3, exp[1]))
 
     def _input_interval(work_stack, count, exp):
         assert(exp[0] == "InputInterval")
@@ -53,34 +76,71 @@ def pass_lift_inputs_and_inline_assigns(exp):
         logger.error("Use of undeclared name: {}", exp[1])
         sys.exit(-1)
 
-    # A leading tuple must be an assign
-    while type(exp[0]) is tuple:
-        assignment = exp[0]
-        assert(assignment[0] == "Assign")
-        name = assignment[1]
-        assert(name[0] == "Name")
-        val = assignment[2]
+    my_expand_dict = {"InputInterval": _input_interval,
+                      "Name":          _name,
+                      "or":            _e_bool_op,
+                      "and":           _e_bool_op,
+                      "not":           _e_bool_neg,
+                      "Constrain":     _e_constrain}
 
-        if name[1] in inputs or name[1] in assigns:
-            logger.error("Variable assigned to twice: {}", name[1])
-            sys.exit(-1)
+    def _contract(work_stack, count, args):
+        work_stack.append((True, count, tuple(args)))
 
-        if val[0] == "InputInterval":
-            inputs[name[1]] = val
-            assert(logger("Found input {} = {}", name[1], val))
-        else:
+    my_contract_dict = {"or":            _contract,
+                        "and":           _contract,
+                        "not":           _contract,
+                        "Constrain":     _contract}
+
+    # Filter the expression, which is a large tuple
+    for part in exp:
+        if part[0] == "Assign":
+            name = part[1]
+            val = part[2]
+            if name[1] in inputs or name[1] in assigns:
+                logger.error("Variable assigned to twice: {}", name[1])
+                sys.exit(-1)
+
+            if name[0] == "SymbolicConst":
+                logger("Dropping assign to SymbolicConst: {}", name[1])
+                continue
+
+            if val[0] == "InputInterval":
+                inputs[name[1]] = val
+                assert(logger("Found input {} = {}", name[1], val))
+                continue
+
             assigns[name[1]] = val
             assert(logger("Found assign {} = {}", name[1], val))
+            continue
 
-        # Work on the rest of the expression
-        exp = exp[1]
+        if part[0] == "Cost":
+            cost.append(part[1])
+            continue
 
-    my_expand_dict = {"InputInterval": _input_interval,
-                      "Name":          _name}
+        if part[0] in {"or", "and", "not", "Constrain"}:
+            constraints.add(part)
+            continue
 
-    new_exp = walk(my_expand_dict, dict(), exp, assigns)
+        logger.error("Unable to determine part of expressions:\n{}\n", part)
+        sys.exit(-1)
 
-    return new_exp, inputs
+    joined_cost = cost[0]
+    for c in cost[1:]:
+        joined_cost = ("+", joined_cost, c)
+
+    logger("joined cost: {}", joined_cost)
+
+    new_exp = walk(my_expand_dict, dict(), joined_cost, assigns)
+
+    logger("new_exp: {}", new_exp)
+
+    new_constraints = list()
+    for cons in constraints:
+        logger("Proccesing constraint:\n{}\n", cons)
+        new_cons = walk(my_expand_dict, my_contract_dict, cons, assigns)
+        new_constraints.append(new_cons)
+
+    return new_exp, new_constraints, inputs
 
 
 def main(argv):
@@ -99,11 +159,14 @@ def main(argv):
 
         logging.set_log_level(logging.HIGH)
         logger("raw: \n{}\n", data)
-        exp, inputs = pass_lift_inputs_and_inline_assigns(tree)
+        exp, constraints, inputs = pass_lift_inputs_and_inline_assigns(tree)
 
         logger("inputs:")
         for name, interval in inputs.items():
             logger("  {} = {}", name, interval)
+        logger("constraints:")
+        for comp, lhs, rhs in constraints:
+            logger("  {} {} {}", lhs, comp, rhs)
         logger("expression:\n{}\n", exp)
 
         return 0

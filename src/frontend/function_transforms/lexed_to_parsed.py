@@ -1,14 +1,11 @@
 
 
+from function_to_lexed import GelpiaLexer
+import gelpia_logging as logging
+import color_printing as color
+
 import sys
 
-try:
-    import gelpia_logging as logging
-    import color_printing as color
-except ModuleNotFoundError:
-    sys.path.append("../")
-    import gelpia_logging as logging
-    import color_printing as color
 logger = logging.make_module_logger(color.magenta("lexed_to_parsed"),
                                     logging.HIGH)
 
@@ -16,69 +13,133 @@ try:
     from sly import Parser
 except ModuleNotFoundError:
     logger.error("SLY must be installed for python3")
-    sys.exit(-1)
-
-from function_to_lexed import GelpiaLexer
+    sys.exit(1)
 
 
 class GelpiaParser(Parser):
     tokens = GelpiaLexer.tokens
 
-    precedence = (("left", "PLUS", "MINUS"),
+    precedence = (("left", "OR", "AND"),
+                  ("left", "PLUS", "MINUS"),
                   ("left", "TIMES", "DIVIDE"),
                   ("right", "UMINUS"),
                   ("right", "INFIX_POW"),)
 
     # function
-    @_("variable EQUALS expression SEMICOLON function")
+    @_("assignment SEMICOLON function")
     def function(self, p):
-        assert(logger("function: variable EQUALS expression SEMICOLON function"))
-        assert(logger("          {} EQUALS {} SEMICOLON {}",
-                      p.variable, p.expression, p.function))
-        return (("Assign", p.variable, p.expression), p.function)
+        logger("function: assignment SEMICOLON function")
+        logger("          {}; {}", p.assignment, *p.function)
+        return (p.assignment, *p.function)
 
-    @_("symbolic_const EQUALS expression SEMICOLON function")
+    @_("compound_constraint SEMICOLON function")
     def function(self, p):
-        logger.warning("Dropping assign to symbolic constant '{}'", p[0][1])
-        return p.function
+        logger("function: compound_constraint SEMICOLON function")
+        logger("          {}; {}", p.compound_constraint, *p.function)
+        return (p.compound_constraint, *p.function)
 
-    @_("interval variable SEMICOLON function")
+    @_("cost SEMICOLON function")
     def function(self, p):
-        assert(logger("function: interval variable SEMICOLON function"))
-        assert(logger("          {} {} SEMICOLON {}",
-                      p.variable, p.interval, p.function))
-        return (("Assign", p.variable, p.interval), p.function)
+        logger("function: cost SEMICOLON function")
+        logger("          {}; {}", p.cost, *p.function)
+        return (p.cost, *p.function)
 
-    @_("interval symbolic_const SEMICOLON function")
+    @_("assignment SEMICOLON",
+       "assignment")
     def function(self, p):
-        logger.warning("Dropping assign to symbolic constant '{}'", p[1][1])
-        return p.function
+        logger("function: assignment SEMICOLON?")
+        logger("          {}", p.asignment)
+        return (p.assignment,)
 
-    @_("expression_star")
+    @_("compound_constraint SEMICOLON",
+       "compound_constraint")
     def function(self, p):
-        assert(logger("function: expression_star"))
-        assert(logger("          {}", p.expression_star))
-        return ("Return", p.expression_star)
+        logger("function: compound_constraint SEMICOLON?")
+        logger("          {}", p.compound_constraint)
+        return (p.compound_constraint,)
 
-    # expression_star
-    @_("expression SEMICOLON expression_star")
-    def expression_star(self, p):
-        assert(logger("expression_star: expression SEMICOLON expression_star"))
-        assert(logger("                 {} SEMICOLON {}",
-                      p.expression, p.expression_star))
-        return ("+", p.expression, p.expression_star)
+    @_("cost SEMICOLON",
+       "cost")
+    def function(self, p):
+        logger("function: cost SEMICOLON?")
+        logger("          {}", p.cost)
+        return (p.cost,)
 
-    @_("expression SEMICOLON")
-    def expression_star(self, p):
-        assert(logger("expression_star: expression SEMICOLON"))
-        assert(logger("                 {} SEMICOLON", p.expression))
-        return p.expression
+    # assignment
+    @_("variable EQUALS expression")
+    def assignment(self, p):
+        logger("assignment: variable EQUALS expression")
+        logger("            {} = {}", p.variable, p.expression)
+        return ("Assign", p.variable, p.expression)
 
+    @_("interval variable")
+    def assignment(self, p):
+        logger("assignment: interval variable")
+        logger("            {} {}", p.variable, p.interval)
+        return ("Assign", p.variable, p.interval)
+
+    @_("symbolic_const EQUALS expression")
+    def assignment(self, p):
+        logger("assignment: symbolic_const EQUALS expression")
+        logger("            {} = {}", p.symbolic_const, p.expression)
+        return ("Assign", p.symbolic_const, p.expression)
+
+    @_("interval symbolic_const")
+    def assignment(self, p):
+        logger("assignment: interval symbolic_const")
+        logger("            {} {}", p.symbolic_const, p.interval)
+        return ("Assign", p.symbolic_const, p.interval)
+
+    # compound constraint
+    @_("compound_constraint OR compound_constraint",
+       "compound_constraint AND compound_constraint")
+    def compound_constraint(self, p):
+        logger("compound_constraint: compound_constraint boolean_op compound_constraint")
+        logger("                     {} {} {}", p.compound_constraint0, p[1], p.compound_constraint1)
+        comp = "and" if p[1] == "&&" else "or"
+        return (comp, p.compound_constraint0, p.compound_constraint1)
+
+    @_("NOT LPAREN compound_constraint RPAREN")
+    def compound_constraint(self, p):
+        logger("compound_constraint: NOT LPAREN compound_constraint RPAREN")
+        logger("                     ~( {} )", p.compound_constraint)
+        return ("not", p.compound_constraint)
+
+    @_("LPAREN compound_constraint RPAREN")
+    def compound_constraint(self, p):
+        logger("compound_constraint: LPAREN compound_constraint RPAREN")
+        logger("                     ( {} )", p.compound_constraint)
+        return p.compound_constraint
+
+    @_("constraint")
+    def compound_constraint(self, p):
+        logger("compound_constraint: constraint")
+        logger("                     {}", p.constraint)
+        return p.constraint
+
+    # constraint
+    @_("expression comparison expression")
+    def constraint(self, p):
+        logger("constraint: expression comparison expression")
+        logger("            {} {} {}", p.expression0, p.comparison, p.expression1)
+        return ("Constrain", p.comparison, p.expression0, p.expression1)
+
+    # cost
     @_("expression")
-    def expression_star(self, p):
-        assert(logger("expression_star: expression"))
-        assert(logger("                 {}", p.expression))
-        return p.expression
+    def cost(self, p):
+        logger("cost: expression")
+        logger("      {}", p.expression)
+        return ("Cost", p.expression)
+
+    # comparison
+    @_("LESS_THAN",
+       "GREATER_THAN",
+       "LESS_THAN_OR_EQUAL",
+       "GREATER_THAN_OR_EQUAL")
+    def comparison(self, p):
+        logger("comparison: <comparison>")
+        logger("            {}", p[0])
+        return p[0]
 
     # expression
     @_("expression PLUS expression",
@@ -86,28 +147,26 @@ class GelpiaParser(Parser):
        "expression TIMES expression",
        "expression DIVIDE expression")
     def expression(self, p):
-        assert(logger("expression: expression {} expression", p._slice[-2].type))
-        assert(logger("            {} {} {}",
-                      p.expression0, p._slice[-2].type, p.expression1))
+        logger("expression: expression <op> expression")
+        logger("            {} {} {}", p.expression0, p[1], p.expression1)
         return (p[1], p.expression0, p.expression1)
 
     @_("expression INFIX_POW expression")
     def expression(self, p):
-        assert(logger("expression: expression INFIX_POW expression"))
-        assert(logger("            {} INFIX_POW {}",
-                      p.expression0, p.expression1))
+        logger("expression: expression INFIX_POW expression")
+        logger("            {} ^ {}", p.expression0, p.expression1)
         return ("pow", p.expression0, p.expression1)
 
     @_("MINUS expression %prec UMINUS")
     def expression(self, p):
-        assert(logger("expression: MINUS expression %prec UMINUS"))
-        assert(logger("            MINUS {}", p.expression))
+        logger("expression: MINUS expression %prec UMINUS")
+        logger("            - {}", p.expression)
         return ("neg", p.expression)
 
     @_("base")
     def expression(self, p):
-        assert(logger("expression: base"))
-        assert(logger("            {}", p.base))
+        logger("expression: base")
+        logger("            {}", p.base)
         return p.base
 
     # base
@@ -118,23 +177,22 @@ class GelpiaParser(Parser):
        "group",
        "func")
     def base(self, p):
-        assert(logger("base: {}", p._slice[-1]))
-        assert(logger("      {}", p[0]))
+        logger("base: <base>")
+        logger("      {}", p[0])
         return p[0]
 
     # variable
     @_("NAME")
     def variable(self, p):
-        assert(logger("variable: NAME"))
-        assert(logger("          {}", p[0]))
+        logger("variable: NAME")
+        logger("          {}", p[0])
         return ("Name", p[0])
 
     # interval
     @_("LBRACE negconst COMMA negconst RBRACE")
     def interval(self, p):
-        assert(logger("interval: LBRACE negconst COMMA negconst RBRACE"))
-        assert(logger("          LBRACE {} COMMA {} RBRACE",
-                      p.negconst0, p.negconst1))
+        logger("interval: LBRACE negconst COMMA negconst RBRACE")
+        logger("          [ {} , {} ]", p.negconst0, p.negconst1)
         left = p.negconst0
         right = p.negconst1
         low = float(left[1])
@@ -143,7 +201,7 @@ class GelpiaParser(Parser):
         if low > high:
             logger.error("Upside down intervals not allowed: [{}, {}]",
                          low, high)
-            sys.exit(-1)
+            sys.exit(1)
 
         if low == high:
             return ("Float", left[1])
@@ -152,15 +210,15 @@ class GelpiaParser(Parser):
 
     @_("LBRACE negconst RBRACE")
     def interval(self, p):
-        assert(logger("interval: LBRACE negconst RBRACE"))
-        assert(logger("          LBRACE {} RBRACE", p.negconst))
+        logger("interval: LBRACE negconst RBRACE")
+        logger("          [ {} ]", p.negconst[1])
         return ("Float", p.negconst[1])
 
     # negconst
     @_("MINUS negconst")
     def negconst(self, p):
-        assert(logger("negconst: MINUS negconst"))
-        assert(logger("          MINUS {}", p.negconst))
+        logger("negconst: MINUS negconst")
+        logger("          - {}", p.negconst)
         typ, val = p.negconst[0:2]
         if val[0] == "-":
             return (typ, val[1:])
@@ -170,57 +228,56 @@ class GelpiaParser(Parser):
     # const
     @_("const")
     def negconst(self, p):
-        assert(logger("negconst: const"))
-        assert(logger("          {}", p.const))
+        logger("negconst: const")
+        logger("          {}", p.const)
         return p.const
 
     @_("integer",
        "float")
     def const(self, p):
-        assert(logger("const: {}", p._slice[-1]))
-        assert(logger("       {}", p[0]))
+        logger("const: <const>")
+        logger("       {}", p[0])
         return p[0]
 
     # integer
     @_("INTEGER")
     def integer(self, p):
-        assert(logger("integer: INTEGER"))
-        assert(logger("         {}", p[0]))
+        logger("integer: INTEGER")
+        logger("         {}", p[0])
         return ("Integer", p[0])
 
     # float
     @_("FLOAT")
     def float(self, p):
-        assert(logger("float: FLOAT"))
-        assert(logger("       {}", p[0]))
+        logger("float: FLOAT")
+        logger("       {}", p[0])
         return ("Float", p[0])
 
     # group
     @_("LPAREN expression RPAREN")
     def group(self, p):
-        assert(logger("group: LPAREN expression RPAREN"))
-        assert(logger("       LPAREN {} RPAREN", p.expression))
+        logger("group: LPAREN expression RPAREN")
+        logger("       ( {} )", p.expression)
         return p.expression
 
     # func
     @_("BINOP LPAREN expression COMMA expression RPAREN")
     def func(self, p):
-        assert(logger("func: BINOP LPAREN expression COMMA expression RPAREN"))
-        assert(logger("      BINOP LPAREN {} COMMA {} RPAREN",
-                      p.expression0, p.expression1))
+        logger("func: BINOP LPAREN expression COMMA expression RPAREN")
+        logger("      {} ( {} , {} )", p[0], p.expression0, p.expression1)
         return (p[0], p.expression0, p.expression1)
 
     @_("UNOP LPAREN expression RPAREN")
     def func(self, p):
-        assert(logger("func: BINOP LPAREN expression RPAREN"))
-        assert(logger("      BINOP LPAREN {} RPAREN", p.expression))
+        logger("func: UNOP LPAREN expression RPAREN")
+        logger("      {} ( {} )", p[0], p.expression)
         return (p[0], p.expression)
 
     # symbolic_const
     @_("SYMBOLIC_CONST")
     def symbolic_const(self, p):
-        assert(logger("symbolic_const: SYMBOLIC_CONST"))
-        assert(logger("                {}", p[0]))
+        logger("symbolic_const: SYMBOLIC_CONST")
+        logger("                {}", p[0])
         return ("SymbolicConst", p[0])
 
     # errors
@@ -229,7 +286,7 @@ class GelpiaParser(Parser):
             logger.error("Line {}: Syntax error at {}".format(p.lineno, str(p)))
         else:
             logger.error("Unexpected end of function")
-        sys.exit(-1)
+        sys.exit(1)
 
 
 def lexed_to_parsed(tokens):

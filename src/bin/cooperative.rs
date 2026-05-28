@@ -7,6 +7,9 @@ extern crate rand;
 extern crate gelpia_utils;
 extern crate ga;
 extern crate gr;
+extern crate solver;
+
+use solver::Solver;
 
 use ga::{ea, Individual};
 
@@ -67,18 +70,25 @@ fn print_q(q: &RwLockWriteGuard<BinaryHeap<Quple>>) {
 /// # Arguments
 /// * `f` - The function to evaluate with
 /// * `input` - The input domain
-fn est_func(f: &FuncObj, input: &Vec<GI>) -> (Flt, GI, Option<Vec<GI>>) {
+fn est_func(f: &FuncObj, input: &Vec<GI>) -> (Flt, Vec<GI>, GI, Option<Vec<GI>>) {
     let mid = midpoint_box(input);
     let (est_m, _) = f.call(&mid);
     let (fsx, dfsx) = f.call(&input);
-    let (fsx_u, _) = f.call(&input.iter()
-                            .map(|&si| GI::new_p(si.upper()))
-                            .collect::<Vec<_>>());
-    let (fsx_l, _) = f.call(&input.iter()
-                            .map(|&si| GI::new_p(si.lower()))
-                            .collect::<Vec<_>>());
-    let est_max = est_m.lower().max(fsx_u.lower()).max(fsx_l.lower());
-    (est_max, fsx, dfsx)
+    let upper = &input.iter()
+        .map(|&si| GI::new_p(si.upper()))
+        .collect::<Vec<_>>();
+    let (fsx_u, _) = f.call(&upper);
+    let lower = &input.iter()
+        .map(|&si| GI::new_p(si.lower()))
+        .collect::<Vec<_>>();
+    let (fsx_l, _) = f.call(&lower);
+    if est_m.lower() > fsx_u.lower() && est_m.lower() > fsx.lower() {
+        (est_m.lower(), mid, fsx, dfsx)
+    } else if fsx_u.lower() > est_m.lower() && fsx_u.lower() > fsx_l.lower() {
+        (fsx_u.lower(), upper.to_vec(), fsx, dfsx)
+    } else {
+        (fsx_l.lower(), lower.to_vec(), fsx, dfsx)
+    }
 }
 
 // Returns the upper bound, the domain where this bound occurs and a status
@@ -91,17 +101,23 @@ fn ibba(x_0: Vec<GI>, e_x: Flt, e_f: Flt, e_f_r: Flt,
         q: Arc<RwLock<BinaryHeap<Quple>>>,
         sync: Arc<AtomicBool>, stop: Arc<AtomicBool>,
         f: FuncObj,
-        logging: bool, max_iters: u32)
+        logging: bool, max_iters: u32,
+        mut solver: Solver)
         -> (Flt, Flt, Vec<GI>) {
     let mut best_x = x_0.clone();
 
     let mut iters: u32 = 0;
-    let (est_max, first_val, _) = est_func(&f, &x_0);
+    let (est_max, est_max_input, first_val, _) = est_func(&f, &x_0);
 
     q.write().unwrap().push(Quple{p: est_max, pf: 0, data: x_0.clone(),
                                   fdata: first_val, dfdata: None});
-    let mut f_best_low = est_max;
-    let mut f_best_high = est_max;
+    let mut f_best_low = NINF;
+    let mut f_best_high = NINF;
+
+    if solver.check_may(&est_max_input) {
+        f_best_low = est_max;
+        f_best_high = est_max;
+    }
 
     while q.read().unwrap().len() != 0 && !stop.load(Ordering::Acquire) {
         if max_iters != 0 && iters >= max_iters {
@@ -157,13 +173,13 @@ fn ibba(x_0: Vec<GI>, e_x: Flt, e_f: Flt, e_f_r: Flt,
         else {
             let (x_s, is_split) = split_box(&x);
             for sx in x_s {
-                let (est_max, fsx, dfsx) = est_func(&f, &sx);
-                if f_best_low < est_max  {
+                let (est_max, est_max_input, fsx, dfsx) = est_func(&f, &sx);
+                if f_best_low < est_max && solver.check_may(&est_max_input) {
                     f_best_low = est_max;
                     *x_bestbb.write().unwrap() = sx.clone();
                 }
                 iters += 1;
-                if is_split {
+                if is_split && solver.check_may(&sx) {
                     q.push(Quple{p: est_max,
                                  pf: gen+1,
                                  data: sx,
@@ -294,12 +310,23 @@ fn main() {
     let x_err = args.x_error;
     let y_err = args.y_error;
     let y_rel = args.y_error_rel;
+    let d_err = args.dreal_error;
+    let d_rel = args.dreal_error_rel;
     let seed = args.seed;
+
+    let mut ea_solver = Solver::new(&args.smt2, &args.names, d_err, d_rel, args.timeout, args.use_z3);
+    let ibba_solver = Solver::new(&args.smt2, &args.names, d_err, d_rel, args.timeout, args.use_z3);
 
     // Early out if there are no input variables...
     if x_0.len() == 0 {
         let result = fo.call(&x_0).0;
         println!("[[{},{}], {{}}]", result.lower(), result.upper());
+        return
+    }
+
+    // Early out if the query makes no sense
+    if !ea_solver.check_may(&x_0) {
+        println!("Overconstrained");
         return
     }
 
@@ -340,7 +367,8 @@ fn main() {
             ibba(x_i, x_err, y_err, y_rel,
                  f_bestag, f_best_shared,
                  x_bestbb,
-                 b1, b2, q, sync, stop, fo_c, logging, iters)
+                 b1, b2, q, sync, stop, fo_c, logging, iters,
+                 ibba_solver)
         })};
 
     let ea_thread =
@@ -355,18 +383,20 @@ fn main() {
         let fo_c = fo.clone();
         let factor = x_e.len();
         thread::Builder::new().name("EA".to_string()).spawn(move || {
-            ea(x_e, Parameters{population: 50*factor, //1000,
-                               selection: 8, //4,
-                               elitism: 5, //2,
-                               mutation: 0.4_f64,//0.3_f64,
-                               crossover: 0.0_f64, // 0.5_f64
-                               seed:  seed,
-            },
+            ea(x_e,
+               Parameters{population: 50*factor, //1000,
+                          selection: 8, //4,
+                          elitism: 5, //2,
+                          mutation: 0.4_f64,//0.3_f64,
+                          crossover: 0.0_f64, // 0.5_f64
+                          seed:  seed,
+               },
                population,
                f_bestag,
                x_bestbb,
                b1, b2,
-               stop, sync, fo_c)
+               stop, sync, fo_c,
+               ea_solver)
         })};
 
     // pending finding out how to kill threads

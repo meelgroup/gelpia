@@ -584,6 +584,8 @@ def pass_simplify(exp, inputs):
 
     exp = walk(dict(), my_contract_dict, exp)
 
+    logger("{}", exp)
+
     return exp
 
 
@@ -602,7 +604,7 @@ def main(argv):
         logging.set_log_level(logging.NONE)
         tokens = function_to_lexed(data)
         tree = lexed_to_parsed(tokens)
-        exp, inputs = pass_lift_inputs_and_inline_assigns(tree)
+        exp, constraints, inputs = pass_lift_inputs_and_inline_assigns(tree)
 
         logging.set_log_level(logging.HIGH)
         logger("raw: \n{}\n", data)

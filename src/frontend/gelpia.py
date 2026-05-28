@@ -9,6 +9,7 @@ from process_function import process_function
 import os
 import os.path as path
 import re
+import subprocess
 import sys
 import time
 from multiprocessing import Process, Value
@@ -64,6 +65,7 @@ def setup_requirements(git_dir):
 
     ld_lib_addition = path.join(git_dir, "requirements/lib")
     append_to_environ("LD_LIBRARY_PATH", ld_lib_addition)
+    append_to_environ("DYLD_LIBRARY_PATH", ld_lib_addition)
 
     lib_addition = path.join(git_dir, "requirements/lib")
     append_to_environ("LIBRARY_PATH", lib_addition)
@@ -76,8 +78,9 @@ def setup_requirements(git_dir):
 
 
 @run_once
-def setup_rust_env(git_dir, debug, serial=False):
+def setup_rust_env(git_dir, debug):
     append_to_environ("LD_LIBRARY_PATH", path.join(git_dir, ".compiled"))
+    append_to_environ("DYLD_LIBRARY_PATH", path.join(git_dir, ".compiled"))
 
     if debug:
         name = "debug"
@@ -87,15 +90,24 @@ def setup_rust_env(git_dir, debug, serial=False):
 
     append_to_environ("LD_LIBRARY_PATH",
                       path.join(git_dir, "src/func/target/{}".format(name)))
+    append_to_environ("DYLD_LIBRARY_PATH",
+                      path.join(git_dir, "src/func/target/{}".format(name)))
     append_to_environ("LD_LIBRARY_PATH",
                       path.join(git_dir, "target/{}/deps".format(name)))
+    append_to_environ("DYLD_LIBRARY_PATH",
+                      path.join(git_dir, "target/{}/deps".format(name)))
 
-    if serial:
-        executable = path.join(git_dir, "target/{}/serial".format(name))
-    else:
-        executable = path.join(git_dir, "target/{}/cooperative".format(name))
+    try:
+        rust_lib = subprocess.check_output(["rustc", "--print", "target-libdir"],
+                                           universal_newlines=True).strip()
+        append_to_environ("LD_LIBRARY_PATH", rust_lib)
+        append_to_environ("DYLD_LIBRARY_PATH", rust_lib)
+    except (OSError, subprocess.CalledProcessError):
+        pass
 
-    return executable
+    cooperative = path.join(git_dir, "target/{}/cooperative".format(name))
+
+    return cooperative
 
 
 def write_rust_function(rust_function, src_dir):
@@ -113,41 +125,54 @@ def write_rust_function(rust_function, src_dir):
 
 
 def _find_max(inputs, consts, rust_function,
-              interp_function, file_id, epsilons, timeout,
-              grace, update, iters, seed, debug, src_dir,
+              interp_function, smt2, file_id, epsilons, timeout,
+              grace, update, iters, seed, debug, use_z3, src_dir,
               executable):
-    input_epsilon, output_epsilon, output_epsilon_relative = epsilons
-    executable_args = ["-c", "|".join(consts.values()),
-                       "-f", interp_function,
-                       "-i", "|".join(inputs.values()),
-                       "-x", str(input_epsilon),
+    input_epsilon, output_epsilon, output_epsilon_relative, dreal_epsilon, dreal_epsilon_relative = epsilons
+    stdout_args = ["|".join(inputs.values()),
+                   ",".join(inputs.keys()),
+                   "|".join(consts.values()),
+                   interp_function,
+                   smt2]
+    executable_args = ["-x", str(input_epsilon),
                        "-y", str(output_epsilon),
                        "-r", str(output_epsilon_relative),
+                       "-Y", str(dreal_epsilon),
+                       "-R", str(dreal_epsilon_relative),
                        "-S", "generated_"+file_id,
-                       "-n", ",".join(inputs.keys()),
                        "-t", str(timeout),
                        "-u", str(update),
                        "-M", str(iters),
                        "--seed", str(seed),
                        "-d" if debug else "",
+                       "-z" if use_z3 else "",
                        "-L" if logging.get_log_level() >= logging.HIGH else ""]
 
     assert(logger(logging.MEDIUM, "calling '{} {}'", executable, executable_args))
+    assert(logger(logging.MEDIUM, "stdout args:\n{}", stdout_args))
     answer_lines = []
+    solver_calls = 0
     max_lower = None
     max_upper = None
     if grace == 0:
         timeout = 2*timeout
     else:
         timeout += grace
-    for line in iu.run_async(executable, executable_args, timeout):
-        logger(logging.HIGH, "rust_solver_output: '{}'", line)
+    for line in iu.run_async(executable, stdout_args, executable_args, timeout):
+        line = line.strip()
+        if line == "":
+            continue
+        logger(logging.MEDIUM, "rust_solver_output: {}", line)
         if line.startswith("lb:"):
             match = re.match(r"lb: ([^,]*), possible ub: ([^,]*), guaranteed ub: ([^,]*)", line)
             max_lower = match.groups(1)
             max_upper = match.groups(3)
+        elif line.startswith("debug:") or line.startswith("Stopping") or "panicked" in line or "RUST_BACKTRACE=1" in line or line.startswith("(stdin)"):
+            pass
+        elif line.startswith("SolverCalls"):
+            solver_calls += int(line.split(":")[1])
         else:
-            answer_lines.append(line.strip())
+            answer_lines.append(line)
 
     to_delete = [
         path.join(GIT_DIR, ".compiled", "libfunc_generated_"+file_id+".so"),
@@ -162,8 +187,12 @@ def _find_max(inputs, consts, rust_function,
         except:
             pass
 
+    output = " ".join(answer_lines)
+
+    if output == "Overconstrained":
+        return output, output, None, solver_calls
+
     try:
-        output = " ".join(answer_lines)
         idx = output.find('[')
         output = output[idx:]
         lst = eval(output, {'inf': float('inf')})
@@ -173,50 +202,66 @@ def _find_max(inputs, consts, rust_function,
                 del lst[-1][k]
         max_lower = lst[0][0]
         max_upper = lst[0][1]
+        domain = lst[-1]
 
-    except:
+    except Exception as e:
+        logging.error("Python exception {}", e)
         if max_lower is None:
-            logging.error("Unable to parse rust solver's output: '{}'", output)
+            logging.error("Unable to parse rust solver's output: <{}>", output)
             sys.exit(-1)
+        raise e
 
-    domain = lst[-1]
+
     for inp in inputs:
         if inp in domain.keys():
             logger(logging.LOW, "  {} in {}", inp, domain[inp])
         else:
             logger(logging.LOW, "  {} in any", inp)
 
-    return max_lower, max_upper, domain
+    return max_lower, max_upper, domain, solver_calls
 
 
-def find_max(function, epsilons, timeout, grace, update, iters, seed, debug,
-             src_dir, executable, max_lower=None, max_upper=None):
-    inputs, consts, rust_function, interp_function = process_function(function)
+def find_max(function, epsilons, timeout, grace, update, iters, seed, debug, use_z3,
+             src_dir, executable, drop_constraints, max_lower=None, max_upper=None, solver_calls=None):
+    inputs, consts, rust_function, interp_function, smt2 = process_function(function)
     file_id = write_rust_function(rust_function, src_dir)
+    if drop_constraints:
+        smt2 = ""
 
-    my_max_lower, my_max_upper, domain = _find_max(inputs, consts, rust_function,
-                                                   interp_function, file_id, epsilons, timeout,
-                                                   grace, update, iters, seed, debug, src_dir,
-                                                   executable)
+    my_max_lower, my_max_upper, domain, my_solver_calls = _find_max(inputs, consts, rust_function,
+                                                                 interp_function, smt2, file_id, epsilons, timeout,
+                                                                 grace, update, iters, seed, debug, use_z3, src_dir,
+                                                                 executable)
     if max_lower is not None:
-        max_lower.value = my_max_lower
-        max_upper.value = my_max_upper
+        # Note: this means you can't tell the difference between the answer [0.0, 0.0] and [Overconstrained, Overconstrained] 
+        solver_calls.value = my_solver_calls
+        if my_max_lower == "Overconstrained":
+            max_lower.value = 0.0
+            max_upper.value = 0.0
+        else:
+            max_lower.value = my_max_lower
+            max_upper.value = my_max_upper
 
-    return my_max_lower, my_max_upper
+    return my_max_lower, my_max_upper, my_solver_calls
 
 
-def find_min(function, epsilons, timeout, grace, update, iters, seed, debug,
-             src_dir, executable):
-    inputs, consts, rust_function, interp_function = process_function(function, invert=True)
+def find_min(function, epsilons, timeout, grace, update, iters, seed, debug, use_z3,
+             src_dir, executable, drop_constraints):
+    inputs, consts, rust_function, interp_function, smt2 = process_function(function, invert=True)
     file_id = write_rust_function(rust_function, src_dir)
+    if drop_constraints:
+        smt2 = ""
 
-    max_lower, max_upper, domain = _find_max(inputs, consts, rust_function,
-                                             interp_function, file_id, epsilons, timeout,
-                                             grace, update, iters, seed, debug, src_dir,
+    max_lower, max_upper, domain, solver_calls = _find_max(inputs, consts, rust_function,
+                                             interp_function, smt2, file_id, epsilons, timeout,
+                                             grace, update, iters, seed, debug, use_z3, src_dir,
                                              executable)
+    if type(max_lower) == str:
+        return max_lower, max_upper, solver_calls
+
     min_lower = -max_upper
     min_upper = -max_lower
-    return min_lower, min_upper
+    return min_lower, min_upper, solver_calls
 
 
 def main(argv):
@@ -226,74 +271,94 @@ def main(argv):
     logging.set_log_filename(args.log_file)
 
     setup_requirements(GIT_DIR)
-    rust_executable = setup_rust_env(GIT_DIR, args.debug, args.serial)
+    cooperative = setup_rust_env(GIT_DIR, args.debug)
 
     if args.mode == "min":
-        min_lower, min_upper = find_min(args.function,
-                                                (args.input_epsilon,
-                                                 args.output_epsilon,
-                                                 args.output_epsilon_relative),
-                                                args.timeout,
-                                                args.grace,
-                                                args.update,
-                                                args.max_iters,
-                                                args.seed,
-                                                args.debug,
-                                                SRC_DIR,
-                                                rust_executable)
+        min_lower, min_upper, solver_calls = find_min(args.function,
+                                        (args.input_epsilon,
+                                         args.output_epsilon,
+                                         args.output_epsilon_relative,
+                                         args.dreal_epsilon,
+                                         args.dreal_epsilon_relative),
+                                        args.timeout,
+                                        args.grace,
+                                        args.update,
+                                        args.max_iters,
+                                        args.seed,
+                                        args.debug,
+                                        args.use_z3,
+                                        SRC_DIR,
+                                        cooperative,
+                                        args.drop_constraints)
         print("Minimum lower bound {}".format(min_lower))
         print("Minimum upper bound {}".format(min_upper))
+        print("Solver calls {}".format(solver_calls))
     elif args.mode == "max":
-        max_lower, max_upper = find_max(args.function,
-                                                (args.input_epsilon,
-                                                 args.output_epsilon,
-                                                 args.output_epsilon_relative),
-                                                args.timeout,
-                                                args.grace,
-                                                args.update,
-                                                args.max_iters,
-                                                args.seed,
-                                                args.debug,
-                                                SRC_DIR,
-                                                rust_executable)
+        max_lower, max_upper, solver_calls = find_max(args.function,
+                                        (args.input_epsilon,
+                                         args.output_epsilon,
+                                         args.output_epsilon_relative,
+                                         args.dreal_epsilon,
+                                         args.dreal_epsilon_relative),
+                                        args.timeout,
+                                        args.grace,
+                                        args.update,
+                                        args.max_iters,
+                                        args.seed,
+                                        args.debug,
+                                        args.use_z3,
+                                        SRC_DIR,
+                                        cooperative,
+                                        args.drop_constraints)
         print("Maximum lower bound {}".format(max_lower))
         print("Maximum upper bound {}".format(max_upper))
+        print("Solver calls {}".format(solver_calls))
     else:
         max_lower = Value("d", float("nan"))
         max_upper = Value("d", float("nan"))
+        max_solver_calls = Value("i", 0)
         p = Process(target=find_max, args=(args.function,
                                            (args.input_epsilon,
                                             args.output_epsilon,
-                                            args.output_epsilon_relative),
+                                            args.output_epsilon_relative,
+                                            args.dreal_epsilon,
+                                            args.dreal_epsilon_relative),
                                            args.timeout,
                                            args.grace,
                                            args.update,
                                            args.max_iters,
                                            args.seed,
                                            args.debug,
+                                           args.use_z3,
                                            SRC_DIR,
-                                           rust_executable,
+                                           cooperative,
+                                           args.drop_constraints,
                                            max_lower,
-                                           max_upper))
+                                           max_upper,
+                                           max_solver_calls))
         p.start()
-        min_lower, min_upper = find_min(args.function,
-                                       (args.input_epsilon,
-                                        args.output_epsilon,
-                                        args.output_epsilon_relative),
-                                       args.timeout,
-                                       args.grace,
-                                       args.update,
-                                       args.max_iters,
-                                       args.seed,
-                                       args.debug,
-                                       SRC_DIR,
-                                       rust_executable)
+        min_lower, min_upper, min_solver_calls = find_min(args.function,
+                                        (args.input_epsilon,
+                                         args.output_epsilon,
+                                         args.output_epsilon_relative,
+                                         args.dreal_epsilon,
+                                         args.dreal_epsilon_relative),
+                                        args.timeout,
+                                        args.grace,
+                                        args.update,
+                                        args.max_iters,
+                                        args.seed,
+                                        args.debug,
+                                        args.use_z3,
+                                        SRC_DIR,
+                                        cooperative,
+                                        args.drop_constraints)
         p.join()
         print("Minimum lower bound {}".format(min_lower))
         print("Minimum upper bound {}".format(min_upper))
         print("Maximum lower bound {}".format(max_lower.value))
         print("Maximum upper bound {}".format(max_upper.value))
-
+        print("Solver calls {}".format(min_solver_calls + max_solver_calls.value))
     return 0
 
 

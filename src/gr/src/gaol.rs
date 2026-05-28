@@ -13,15 +13,26 @@ use std::arch::x86::{__m128d,_mm_setzero_pd};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::{__m128d,_mm_setzero_pd};
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub type CInterval = __m128d;
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+pub type CInterval = [c_double; 2];
 
 trait Interval {
     fn new() -> Self;
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 impl Interval for CInterval {
     fn new() -> Self {
         unsafe { _mm_setzero_pd() }
+    }
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+impl Interval for CInterval {
+    fn new() -> Self {
+        [0.0, 0.0]
     }
 }
 
@@ -35,8 +46,9 @@ pub struct gaol_int {
 // Functions exported from the C GAOL wrapper.
 #[link(name="rustgaol", kind="dylib")]
 #[link(name="gaol", kind="dylib")]
-#[link(name="gdtoa", kind="dylib")]
-#[link(name="crlibm", kind="dylib")]
+#[cfg_attr(not(target_os = "macos"), link(name="gdtoa", kind="dylib"))]
+#[cfg_attr(not(target_os = "macos"), link(name="crlibm", kind="dylib"))]
+#[cfg_attr(target_os = "macos", link(name="crlibm", kind="static"))]
 extern {
     // All constructors and non inplace functions return an allocated
     // interval. These resources must be freed.

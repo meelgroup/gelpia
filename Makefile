@@ -1,9 +1,26 @@
 
-# Set paths to point to locally built requirements first
+# Set paths to point to locally built requirements first.
+# Use `make MACOS=1` on macOS, where gaol is typically installed via Homebrew
+# and crlibm is built into requirements/.
+MACOS ?= 0
+HOMEBREW_PREFIX ?= $(shell if command -v brew >/dev/null 2>&1; then brew --prefix; else echo /opt/homebrew; fi)
+
 export PATH := ${CURDIR}/requirements/bin:${PATH}
 export LD_LIBRARY_PATH := $(CURDIR)/requirements/lib:${LD_LIBRARY_PATH}
 export CPLUS_INCLUDE_PATH := $(CURDIR)/requirements/include:${CPLUS_INCLUDE_PATH}
 export LIBRARY_PATH := $(CURDIR)/requirements/lib:${LIBRARY_PATH}
+
+ifeq ($(MACOS),1)
+export GELPIA_MACOS := 1
+export DYLD_LIBRARY_PATH := $(CURDIR)/requirements/lib:${DYLD_LIBRARY_PATH}
+export CPLUS_INCLUDE_PATH := $(HOMEBREW_PREFIX)/include:${CPLUS_INCLUDE_PATH}
+export LIBRARY_PATH := $(HOMEBREW_PREFIX)/lib:${LIBRARY_PATH}
+GAOL_REPL_ARCH_FLAGS :=
+GAOL_REPL_LIBS := -lgaol -lcrlibm
+else
+GAOL_REPL_ARCH_FLAGS := -msse3
+GAOL_REPL_LIBS := -lgaol -lcrlibm -lgdtoa
+endif
 
 
 all: bin/gelpia src/func/comp_comm.sh bin/build_func.sh bin/gaol_repl
@@ -25,7 +42,7 @@ src/func/comp_comm.sh: src/func/src/lib_fillin.rs
 	@mkdir -p .compiled
 
 bin/gaol_repl: src/gaol_repl.cc | bin
-	@${CXX} ${CXXFLAGS} -msse3 -O2 src/gaol_repl.cc -o bin/gaol_repl -lgaol -lcrlibm -lgdtoa
+	@${CXX} ${CXXFLAGS} -std=c++11 $(GAOL_REPL_ARCH_FLAGS) -O2 src/gaol_repl.cc -o bin/gaol_repl $(GAOL_REPL_LIBS)
 
 bin:
 	mkdir bin

@@ -1,0 +1,133 @@
+name: Python CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-smoke-checks:
+    name: Frontend Smoke Checks (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show Python version
+        run: python --version
+
+      - name: Install Python frontend dependency
+        run: python -m pip install --upgrade pip sly
+
+      - name: Compile Python frontend sources
+        run: PYTHONPYCACHEPREFIX=.pycache python -m compileall src/frontend
+
+      - name: Verify Python frontend imports
+        run: |
+          PYTHONPATH=src/frontend:src/frontend/function_transforms \
+          python -c "import argument_parser, gelpia_logging, process_function"
+
+      - name: Validate repository entrypoints exist
+        run: |
+          test -f Makefile
+          test -f Cargo.toml
+          test -f src/frontend/gelpia.py
+
+  native-end-to-end-checks:
+    name: Native End-to-End Checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show Python version
+        run: python --version
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install sly
+      - name: Install Ubuntu system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison wget
+
+      - name: Install macOS system dependencies
+        if: runner.os == 'macOS'
+        run: brew install bison flex meson ninja wget
+
+      - name: Build requirements
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            make requirements
+          else
+            bash .github/scripts/build-macos-requirements.sh
+          fi
+
+      - name: Build gelpia
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            make
+          else
+            make MACOS=1
+          fi
+
+      - name: Get gelpia_tests
+        run: |
+          git clone https://github.com/soarlab/gelpia_tests.git
+          cd gelpia_tests
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            make
+          else
+            make MACOS=1
+          fi
+
+      - name: Run tests
+        run: |
+          cd gelpia_tests
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            make test
+          else
+            make test MACOS=1
+          fi
+
+  rust-manifest-check:
+    name: Rust Manifest Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate Cargo metadata
+        run: cargo metadata --format-version 1 --no-deps > /dev/null

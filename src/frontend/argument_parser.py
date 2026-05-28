@@ -9,7 +9,7 @@ import sys
 
 
 defaults = argparse.Namespace(
-    serial=False,
+    drop_constraints=False,
     debug=False,
     verbose="none",
     mode="max",
@@ -17,7 +17,10 @@ defaults = argparse.Namespace(
     max_iters=0,
     input_epsilon=0.001,
     output_epsilon=0.001,
-    output_epsilon_relative=0,
+    output_epsilon_relative=0.001,
+    use_z3=False,
+    dreal_epsilon=0.00001,
+    dreal_epsilon_relative=0.00001,
     seed=0,
     grace=0,
     update=0,
@@ -36,7 +39,7 @@ def parse_args(argv):
             with open(args.query_file, "r") as f:
                 lines = f.readlines()
         except FileNotFoundError:
-            logging.error("File not found '{}'". args.query_file)
+            logging.error("File not found '{}'", args.query_file)
             sys.exit(-1)
 
         lines = [line.strip() for line in lines]
@@ -55,6 +58,10 @@ def parse_args(argv):
         file_args = arg_parser.parse_args(["-f", function_str] + file_argv)
 
     final_args = get_final_args(defaults, args, file_args)
+
+    logging.set_log_level(final_args.verbose)
+
+    log_args(final_args)
 
     return final_args
 
@@ -79,9 +86,9 @@ def get_final_args(defaults, args, file_args):
 
     final_args = argparse.Namespace(
         function=f.function,
-        serial=combine(d.serial,
-                       a.serial,
-                       f.serial),
+        drop_constraints=combine(d.drop_constraints,
+                                 a.drop_constraints,
+                                 f.drop_constraints),
         debug=combine(d.debug,
                       a.debug,
                       f.debug),
@@ -106,6 +113,15 @@ def get_final_args(defaults, args, file_args):
         output_epsilon_relative=combine(d.output_epsilon_relative,
                                         a.output_epsilon_relative,
                                         f.output_epsilon_relative),
+        use_z3=combine(d.use_z3,
+                       a.use_z3,
+                       f.use_z3),
+        dreal_epsilon=combine(d.dreal_epsilon,
+                              a.dreal_epsilon,
+                              f.dreal_epsilon),
+        dreal_epsilon_relative=combine(d.dreal_epsilon_relative,
+                                       a.dreal_epsilon_relative,
+                                       f.dreal_epsilon_relative),
         seed=combine(d.seed,
                      a.seed,
                      f.seed),
@@ -133,9 +149,9 @@ def get_final_args(defaults, args, file_args):
 
 def log_args(args):
     logger = logging.make_module_logger(color.cyan("argument_parser"),
-                                        logging.MEDIUM)
+                                        logging.LOW)
     logger("Argument settings:")
-    logger("  serial = {}", args.serial)
+    logger("  drop_constraints = {}", args.drop_constraints)
     logger("  debug = {}", args.debug)
     logger("  verbose = {}", args.verbose)
     logger("  mode = '{}'", args.mode)
@@ -144,6 +160,9 @@ def log_args(args):
     logger("  input_epsilon = {}", args.input_epsilon)
     logger("  output_epsilon = {}", args.output_epsilon)
     logger("  output_epsilon_relative = {}", args.output_epsilon_relative)
+    logger("  use_z3 = {}", args.use_z3)
+    logger("  dreal_epsilon = {}", args.dreal_epsilon)
+    logger("  dreal_epsilon_relative = {}", args.dreal_epsilon_relative)
     logger("  seed = {}", args.seed)
     logger("  grace = {}", args.grace)
     logger("  update = {}", args.update)
@@ -165,11 +184,11 @@ def create_arg_parser():
                        help="The function to optimize. Uses a modified dop"
                        " format. For examples see the 'examples' directory"
                        " in gelpia's git.")
-    arg_parser.add_argument("--serial",
+    arg_parser.add_argument("-D", "--drop_constraints",
                             action="store_const",
                             const=True,
-                            help="Use the serial rust solver."
-                            " (default {})".format(defaults.serial))
+                            help="Ignore all constraints"
+                            " (default {})".format(defaults.drop_constraints))
     arg_parser.add_argument("-d", "--debug",
                             action="store_const",
                             const=True,
@@ -208,6 +227,18 @@ def create_arg_parser():
                             help="Relative cutoff for function output size"
                             " (default {})"
                             .format(defaults.output_epsilon_relative))
+    arg_parser.add_argument("-z", "--use-z3",
+                            action="store_const",
+                            const=True,
+                            help="Use z3 to handle constraints instead of dreal")
+    arg_parser.add_argument("--dreal-epsilon",
+                            type=float,
+                            help="Dreal's '--nlopt-ftol-abs' argument"
+                            " (default {})".format(defaults.dreal_epsilon))
+    arg_parser.add_argument("--dreal-epsilon-relative",
+                            type=float,
+                            help="Dreal's '--nlopt-ftol-rel' argument"
+                            " (default {})".format(defaults.dreal_epsilon_relative))
     arg_parser.add_argument("-s", "--seed",
                             type=int,
                             help="Seed for the random number generator. A value"

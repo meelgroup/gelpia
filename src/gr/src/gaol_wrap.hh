@@ -1,12 +1,23 @@
 #ifndef TEST_H
 #define TEST_H
+#if defined(__SSE2__) && (defined(__x86_64__) || defined(__i386__))
 #include <xmmintrin.h>
+#define GELPIA_GAOL_SSE 1
+#else
+#define GELPIA_GAOL_SSE 0
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-  typedef struct gaol_int {__m128 data;} gaol_int;
+  typedef struct gaol_int {
+#if GELPIA_GAOL_SSE
+    __m128d data;
+#else
+    double data[2];
+#endif
+  } gaol_int;
 
   void make_interval_dd(double, double, gaol_int*);
   void make_interval_d(double, gaol_int*);

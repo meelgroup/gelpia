@@ -26,13 +26,14 @@ class AsyncReader(threading.Thread):
             self.q.put(output)
 
 
-def run_async(cmd, args_list, timeout, error_string="An Error has occured",
+def run_async(cmd, stdout_lines, args_list, timeout, error_string="An Error has occured",
               expected_return=0):
     command = [cmd] + args_list
     should_exit = None
     term_time = time.time() + timeout
     try:
         with subprocess.Popen(command,
+                              stdin=subprocess.PIPE,
                               bufsize=1,
                               universal_newlines=True,
                               stdout=subprocess.PIPE,
@@ -44,23 +45,35 @@ def run_async(cmd, args_list, timeout, error_string="An Error has occured",
             stdout_r.start()
             output = []
 
+            # Send output
+            proc.stdin.write("\n".join(stdout_lines)+"\n")
+
+            done = False
             while proc.poll() is None:
                 if not stdout_q.empty():
                     line = stdout_q.get()
                     output.append(line)
                     yield line
+                    if line.strip() == "}]":
+                        proc.kill()
+                        proc.wait(timeout=1)
+                        done = True
+                        break
 
                 # Kill proc if timeout exceeded
                 if term_time is not None:
                     if timeout != 0 and time.time() > term_time:
                         print("Killed by timeout")
                         proc.kill()
+                        proc.wait(timeout=1)
+                        break
                 #time.sleep(0.1)
 
             # Clear remaining buffered messages
-            while stdout_r.is_alive() or not stdout_q.empty():
-                if not stdout_q.empty():
-                    yield stdout_q.get()
+            if not done:
+                while stdout_r.is_alive() or not stdout_q.empty():
+                    if not stdout_q.empty():
+                        yield stdout_q.get()
 
             proc.wait()
             if (expected_return is not None) and (proc.returncode not in
@@ -68,7 +81,7 @@ def run_async(cmd, args_list, timeout, error_string="An Error has occured",
                 logging.error(error_string)
                 logging.error("Return code: {}".format(proc.returncode))
                 logging.error("Command used: {}".format(command))
-                logging.error("Trace:\n{}".format("\n".join(output)))
+                logging.error("Trace:\n{}".format("".join(output)))
                 should_exit = proc.returncode
     except KeyboardInterrupt:
         raise
