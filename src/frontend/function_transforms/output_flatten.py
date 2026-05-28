@@ -40,7 +40,7 @@ def output_flatten(exp, inputs=None, consts=None, assigns=None):
         assert(logger("expand_float: {}", exp))
         assert(exp[0] == "Float")
         assert(len(exp) == 2)
-        work_stack.append((True, count, ["[", exp[1], "]"]))
+        work_stack.append((True, count, ["[", repr(float(exp[1])), "]"]))
 
     def _integer(work_stack, count, exp):
         assert(logger("expand_integer: {}", exp))
@@ -66,7 +66,7 @@ def output_flatten(exp, inputs=None, consts=None, assigns=None):
         assert(logger("expand_constant_interval: {}", exp))
         assert(exp[0] == "ConstantInterval")
         assert(len(exp) == 3)
-        work_stack.append((True, count, ["[", exp[1][1], ", ", exp[2][1], "]"]))
+        work_stack.append((True, count, ["[", repr(float(exp[1][1])), ", ", repr(float(exp[2][1])), "]"]))
 
     my_expand_dict = {"Input": _input,
                       "Const": _const,
